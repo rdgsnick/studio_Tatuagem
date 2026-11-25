@@ -19,7 +19,7 @@ const STYLES = ['Fine line','Blackwork','Realismo','Ornamental','Tradicional'];
 
 app.disable('x-powered-by');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
-app.use(express.json({ limit: '20kb' }));
+app.use(express.json({ limit: '9mb' }));
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Muitas tentativas. Aguarde 15 minutos e tente novamente.' } });
 const bookingLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Muitas solicitações. Tente novamente mais tarde.' } });
@@ -69,6 +69,10 @@ function isSlotTaken(bookings, date, time, ignoreId = null) {
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'ink-studio-api' }));
+app.get('/api/photos', (_req, res) => {
+  const db = readStore();
+  res.json({ photos: db.photos || [] });
+});
 app.get('/api/public-config', (_req, res) => res.json({ whatsappNumber: (process.env.WHATSAPP_NUMBER || '').replace(/\D/g, '') }));
 app.get('/api/availability', (req, res) => {
   const date = String(req.query.date || '');
@@ -146,6 +150,38 @@ app.patch('/api/admin/bookings/:id', auth, (req, res) => {
   writeStore(db);
   res.json({ booking });
 });
+app.post('/api/admin/photos', auth, (req, res) => {
+  const { title, type, place = '', client = '', dataUrl } = req.body || {};
+  if (typeof title !== 'string' || !title.trim() || title.trim().length > 80) return res.status(400).json({ error: 'Informe um título com até 80 caracteres.' });
+  if (!STYLES.includes(type)) return res.status(400).json({ error: 'Selecione um estilo válido.' });
+  if (typeof place !== 'string' || place.length > 80 || typeof client !== 'string' || client.length > 80) return res.status(400).json({ error: 'Região ou cliente excede o limite de caracteres.' });
+  if (typeof dataUrl !== 'string') return res.status(400).json({ error: 'Selecione uma imagem.' });
+  const match = dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) return res.status(400).json({ error: 'Formato inválido. Use JPG, PNG ou WebP.' });
+  const buffer = Buffer.from(match[2], 'base64');
+  if (!buffer.length || buffer.length > 6 * 1024 * 1024) return res.status(400).json({ error: 'A imagem deve ter no máximo 6 MB.' });
+  const ext = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1];
+  const id = crypto.randomUUID();
+  const uploadDir = path.join(__dirname, 'uploads');
+  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.writeFileSync(path.join(uploadDir, `${id}.${ext}`), buffer, { flag: 'wx' });
+  const photo = { id, title: title.trim(), type, place: place.trim(), client: client.trim(), image: `/uploads/${id}.${ext}`, createdAt: new Date().toISOString() };
+  const db = readStore();
+  db.photos = [...(db.photos || []), photo];
+  writeStore(db);
+  res.status(201).json({ photo });
+});
+app.delete('/api/admin/photos/:id', auth, (req, res) => {
+  const db = readStore();
+  const photo = (db.photos || []).find(item => item.id === req.params.id);
+  if (!photo) return res.status(404).json({ error: 'Foto não encontrada.' });
+  db.photos = db.photos.filter(item => item.id !== req.params.id);
+  writeStore(db);
+  const filename = path.basename(photo.image || '');
+  if (filename) { try { fs.unlinkSync(path.join(__dirname, 'uploads', filename)); } catch {} }
+  res.json({ deleted: true });
+});
+
 app.delete('/api/admin/bookings/:id', auth, (req, res) => {
   const db = readStore();
   const before = db.bookings.length;
@@ -157,6 +193,7 @@ app.delete('/api/admin/bookings/:id', auth, (req, res) => {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '../dist');
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 if (fs.existsSync(distDir)) {
   app.use(express.static(distDir));
   app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')));

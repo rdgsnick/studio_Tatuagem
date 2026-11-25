@@ -17,7 +17,7 @@ export function readStore() {
   ensureStore();
   try {
     const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
-    return { bookings: Array.isArray(data.bookings) ? data.bookings : [], sessions: Array.isArray(data.sessions) ? data.sessions : [] };
+    return { bookings: Array.isArray(data.bookings) ? data.bookings : [], sessions: Array.isArray(data.sessions) ? data.sessions : [], photos: Array.isArray(data.photos) ? data.photos : [] };
   } catch {
     throw new Error('O arquivo do banco local está inválido. Faça uma cópia antes de tentar recuperá-lo.');
   }
